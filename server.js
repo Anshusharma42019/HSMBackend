@@ -77,65 +77,78 @@ app.use((req, res, next) => {
 // Serve uploaded files for fallback method
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
+// Health check endpoint (before DB middleware)
+app.get("/health", (req, res) => {
+  const dbState = mongoose.connection.readyState;
+  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  
+  res.json({
+    status: dbState === 1 ? "ok" : "error",
+    database: states[dbState] || 'unknown',
+    dbState: dbState,
+    mongoUri: process.env.MONGO_URI ? 'configured' : 'missing',
+    mongoUriStart: process.env.MONGO_URI ? process.env.MONGO_URI.substring(0, 20) : 'N/A',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get("/", (req, res) => {
+  res.json({
+    message: "API is running",
+    mongoUri: process.env.MONGO_URI ? 'configured' : 'MISSING',
+    dbState: mongoose.connection.readyState
+  });
+});
+
 // Database connection
-let isConnected = false;
-let connectionAttempts = 0;
-const MAX_RETRIES = 3;
+let connectionPromise = null;
 
 // Simplified MongoDB connection for serverless
 const connectToMongoDB = async () => {
   if (mongoose.connection.readyState === 1) {
-    return true;
+    return mongoose.connection;
   }
 
-  if (connectionAttempts >= MAX_RETRIES) {
-    throw new Error(`Failed after ${MAX_RETRIES} connection attempts`);
+  if (mongoose.connection.readyState === 2) {
+    // Already connecting, wait for existing connection
+    if (connectionPromise) return connectionPromise;
   }
+
+  if (!process.env.MONGO_URI) {
+    throw new Error("MONGO_URI not found");
+  }
+
+  connectionPromise = mongoose.connect(process.env.MONGO_URI, {
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+  });
 
   try {
-    if (!process.env.MONGO_URI) {
-      throw new Error("MONGO_URI not found in environment variables");
-    }
-
-    connectionAttempts++;
-    console.log(`MongoDB connection attempt ${connectionAttempts}/${MAX_RETRIES}`);
-
-    const connectionOptions = {
-      serverSelectionTimeoutMS: 10000,
-      connectTimeoutMS: 10000,
-      socketTimeoutMS: 45000,
-      maxPoolSize: 10,
-      minPoolSize: 1,
-      retryWrites: true,
-      w: 'majority'
-    };
-    
-    await mongoose.connect(process.env.MONGO_URI, connectionOptions);
-    isConnected = true;
-    connectionAttempts = 0;
-    console.log("MongoDB connected successfully");
-    return true;
-    
+    await connectionPromise;
+    console.log("MongoDB connected");
+    connectionPromise = null;
+    return mongoose.connection;
   } catch (error) {
-    console.error("Database connection failed:", error.message);
-    isConnected = false;
+    console.error("MongoDB connection error:", error.message);
+    connectionPromise = null;
     throw error;
   }
 };
 
 // Middleware to ensure DB connection
 app.use(async (req, res, next) => {
+  if (mongoose.connection.readyState === 1) {
+    return next();
+  }
+  
   try {
-    if (mongoose.connection.readyState !== 1) {
-      await connectToMongoDB();
-    }
+    await connectToMongoDB();
     next();
   } catch (error) {
-    console.error('DB middleware error:', error.message);
-    return res.status(503).json({ 
-      error: 'Database connection failed', 
-      message: error.message,
-      mongoUri: process.env.MONGO_URI ? 'configured' : 'missing'
+    console.error('DB error:', error.message);
+    res.status(503).json({ 
+      error: 'Database unavailable',
+      details: error.message
     });
   }
 });
@@ -174,44 +187,7 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/housekeeping", housekeepingRoutes);
 
 
-// Health check endpoint
-app.get("/health", async (req, res) => {
-  const dbState = mongoose.connection.readyState;
-  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-  
-  res.json({
-    status: dbState === 1 ? "ok" : "error",
-    database: states[dbState] || 'unknown',
-    dbState: dbState,
-    mongoUri: process.env.MONGO_URI ? 'configured' : 'missing',
-    timestamp: new Date().toISOString()
-  });
-});
 
-// Database test endpoint
-app.get("/test-db", async (req, res) => {
-  try {
-    await connectToMongoDB();
-    const testConnection = await mongoose.connection.db.admin().ping();
-    res.json({
-      success: true,
-      message: "Database connection successful",
-      dbName: mongoose.connection.name,
-      readyState: mongoose.connection.readyState,
-      ping: testConnection
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: "Database test failed",
-      message: error.message,
-      readyState: mongoose.connection.readyState
-    });
-  }
-});
-
-app.get("/", (req, res) => {
-  res.send("API is running");
-});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -221,23 +197,14 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Connect to MongoDB on startup
-if (process.env.VERCEL) {
-  connectToMongoDB().catch(err => {
-    console.error('Initial MongoDB connection failed:', err.message);
-  });
-}
+// Initialize MongoDB connection
+connectToMongoDB().catch(err => 
+  console.error('Initial connection failed:', err.message)
+);
 
 // Start server for local development
 if (!process.env.VERCEL) {
-  connectToMongoDB()
-    .then(() => {
-      app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-    })
-    .catch(err => {
-      console.error('Failed to start server:', err);
-      process.exit(1);
-    });
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
 
 // Export for serverless
