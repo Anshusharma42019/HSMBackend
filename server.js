@@ -82,7 +82,7 @@ let isConnected = false;
 
 // Simplified MongoDB connection for serverless
 const connectToMongoDB = async () => {
-  if (isConnected && mongoose.connection.readyState === 1) {
+  if (mongoose.connection.readyState === 1) {
     return;
   }
 
@@ -92,25 +92,20 @@ const connectToMongoDB = async () => {
     }
 
     const connectionOptions = {
-      serverSelectionTimeoutMS: 3000,
-      connectTimeoutMS: 3000,
-      maxPoolSize: 1,
-      minPoolSize: 0,
-      maxIdleTimeMS: 10000,
+      serverSelectionTimeoutMS: 30000,
+      connectTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      maxPoolSize: 10,
+      minPoolSize: 1,
+      maxIdleTimeMS: 30000,
       retryWrites: true,
-      w: 'majority'
+      w: 'majority',
+      family: 4
     };
     
     await mongoose.connect(process.env.MONGO_URI, connectionOptions);
     isConnected = true;
     console.log("MongoDB connected successfully");
-    
-    // Optimize database with indexes (run once after connection is stable)
-    setTimeout(async () => {
-      if (mongoose.connection.readyState === 1) {
-        await optimizeDatabase();
-      }
-    }, 1000);
     
   } catch (error) {
     console.error("Database connection failed:", error.message);
@@ -121,14 +116,14 @@ const connectToMongoDB = async () => {
 
 // Middleware to ensure DB connection
 app.use(async (req, res, next) => {
-  try {
-    await connectToMongoDB();
-    req.dbConnected = isConnected;
-    next();
-  } catch (error) {
-    req.dbConnected = false;
-    next();
+  if (mongoose.connection.readyState !== 1) {
+    try {
+      await connectToMongoDB();
+    } catch (error) {
+      return res.status(503).json({ error: 'Database unavailable' });
+    }
   }
+  next();
 });
 
 // Routes
