@@ -176,20 +176,16 @@ app.use("/api/housekeeping", housekeepingRoutes);
 
 // Health check endpoint
 app.get("/health", async (req, res) => {
-  try {
-    await connectToMongoDB();
-    res.json({
-      status: "ok",
-      dbConnected: isConnected,
-      connectionState: mongoose.connection.readyState
-    });
-  } catch (error) {
-    res.json({
-      status: "error",
-      dbConnected: false,
-      error: error.message
-    });
-  }
+  const dbState = mongoose.connection.readyState;
+  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  
+  res.json({
+    status: dbState === 1 ? "ok" : "error",
+    database: states[dbState] || 'unknown',
+    dbState: dbState,
+    mongoUri: process.env.MONGO_URI ? 'configured' : 'missing',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Database test endpoint
