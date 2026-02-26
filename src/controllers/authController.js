@@ -2,7 +2,11 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET is not configured');
+  }
+  return jwt.sign({ id }, secret, { expiresIn: '7d' });
 };
 
 const register = async (req, res) => {
@@ -37,6 +41,11 @@ const login = async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET not configured');
+      return res.status(500).json({ error: 'Server configuration error' });
     }
 
     const user = await User.findOne({ 
