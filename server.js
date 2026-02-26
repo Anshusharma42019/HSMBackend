@@ -49,7 +49,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5000",
   "https://hsm-frontend-kappa.vercel.app",
-  "https://hsm-backend-upcu.vercel.app",
+  "https://hsm-backend-upcu.vercel.app"
  
 ];
 
