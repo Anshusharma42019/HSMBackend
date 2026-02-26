@@ -79,11 +79,17 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Database connection
 let isConnected = false;
+let connectionAttempts = 0;
+const MAX_RETRIES = 3;
 
 // Simplified MongoDB connection for serverless
 const connectToMongoDB = async () => {
   if (mongoose.connection.readyState === 1) {
-    return;
+    return true;
+  }
+
+  if (connectionAttempts >= MAX_RETRIES) {
+    throw new Error(`Failed after ${MAX_RETRIES} connection attempts`);
   }
 
   try {
@@ -91,27 +97,27 @@ const connectToMongoDB = async () => {
       throw new Error("MONGO_URI not found in environment variables");
     }
 
+    connectionAttempts++;
+    console.log(`MongoDB connection attempt ${connectionAttempts}/${MAX_RETRIES}`);
+
     const connectionOptions = {
-      serverSelectionTimeoutMS: 30000,
-      connectTimeoutMS: 30000,
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
       socketTimeoutMS: 45000,
       maxPoolSize: 10,
       minPoolSize: 1,
-      maxIdleTimeMS: 30000,
       retryWrites: true,
-      w: 'majority',
-      family: 4,
-      useNewUrlParser: true,
-      useUnifiedTopology: true
+      w: 'majority'
     };
     
     await mongoose.connect(process.env.MONGO_URI, connectionOptions);
     isConnected = true;
+    connectionAttempts = 0;
     console.log("MongoDB connected successfully");
+    return true;
     
   } catch (error) {
     console.error("Database connection failed:", error.message);
-    console.error("Connection string:", process.env.MONGO_URI ? 'Present' : 'Missing');
     isConnected = false;
     throw error;
   }
@@ -119,19 +125,19 @@ const connectToMongoDB = async () => {
 
 // Middleware to ensure DB connection
 app.use(async (req, res, next) => {
-  if (mongoose.connection.readyState !== 1) {
-    try {
+  try {
+    if (mongoose.connection.readyState !== 1) {
       await connectToMongoDB();
-    } catch (error) {
-      console.error('DB connection error in middleware:', error.message);
-      return res.status(503).json({ 
-        error: 'Database unavailable', 
-        details: error.message,
-        hasMongoUri: !!process.env.MONGO_URI 
-      });
     }
+    next();
+  } catch (error) {
+    console.error('DB middleware error:', error.message);
+    return res.status(503).json({ 
+      error: 'Database connection failed', 
+      message: error.message,
+      mongoUri: process.env.MONGO_URI ? 'configured' : 'missing'
+    });
   }
-  next();
 });
 
 // Routes
@@ -219,9 +225,23 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
+// Connect to MongoDB on startup
+if (process.env.VERCEL) {
+  connectToMongoDB().catch(err => {
+    console.error('Initial MongoDB connection failed:', err.message);
+  });
+}
+
 // Start server for local development
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  connectToMongoDB()
+    .then(() => {
+      app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    })
+    .catch(err => {
+      console.error('Failed to start server:', err);
+      process.exit(1);
+    });
 }
 
 // Export for serverless
