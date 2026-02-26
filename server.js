@@ -100,7 +100,9 @@ const connectToMongoDB = async () => {
       maxIdleTimeMS: 30000,
       retryWrites: true,
       w: 'majority',
-      family: 4
+      family: 4,
+      useNewUrlParser: true,
+      useUnifiedTopology: true
     };
     
     await mongoose.connect(process.env.MONGO_URI, connectionOptions);
@@ -109,6 +111,7 @@ const connectToMongoDB = async () => {
     
   } catch (error) {
     console.error("Database connection failed:", error.message);
+    console.error("Connection string:", process.env.MONGO_URI ? 'Present' : 'Missing');
     isConnected = false;
     throw error;
   }
@@ -120,7 +123,12 @@ app.use(async (req, res, next) => {
     try {
       await connectToMongoDB();
     } catch (error) {
-      return res.status(503).json({ error: 'Database unavailable' });
+      console.error('DB connection error in middleware:', error.message);
+      return res.status(503).json({ 
+        error: 'Database unavailable', 
+        details: error.message,
+        hasMongoUri: !!process.env.MONGO_URI 
+      });
     }
   }
   next();
