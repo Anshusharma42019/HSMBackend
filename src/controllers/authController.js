@@ -35,11 +35,20 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
     const user = await User.findOne({ 
       $or: [{ email }, { username: email }] 
     });
-    if (!user || user.status !== 'active') {
+    
+    if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    if (user.status !== 'active') {
+      return res.status(401).json({ error: 'Account is inactive' });
     }
 
     const isMatch = await user.comparePassword(password);
@@ -59,6 +68,7 @@ const login = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(400).json({ error: error.message });
   }
 };
